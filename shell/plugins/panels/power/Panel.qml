@@ -19,6 +19,9 @@ Panel {
   property string activeProfile: ""
   property int profileIndex: 0
   property bool cursorActive: false
+  property string focusSection: "profiles"
+  property int chargeLimitPreview: -1
+  property string chargeLimitMessage: ""
   readonly property bool showPercentage: setting("showPercentage", false) === true
   // With the percentage shown the button paints a text block wider than an
   // icon, so the open-panel mark takes the painted width instead of the
@@ -28,6 +31,10 @@ Panel {
     var device = UPower.displayDevice
     return !!(device && device.isPresent)
   }
+  readonly property bool chargeLimitSupported: batteryInfo.chargeLimit !== undefined
+    && Number.isFinite(Number(batteryInfo.chargeLimit))
+  readonly property int chargeLimit: Model.clampChargeLimit(batteryInfo.chargeLimit)
+  readonly property int displayedChargeLimit: chargeLimitPreview >= 0 ? chargeLimitPreview : chargeLimit
 
   function upowerStates() {
     return {
@@ -45,6 +52,46 @@ Panel {
   function activateSelectedProfile() {
     if (profileIndex < 0 || profileIndex >= profiles.length) return
     setProfile(profiles[profileIndex])
+  }
+
+  function revealCursor() {
+    cursorActive = true
+    focusSection = chargeLimitSupported ? "chargeLimit" : "profiles"
+  }
+
+  function moveCursor(dx, dy) {
+    if (!cursorActive) {
+      revealCursor()
+      return
+    }
+
+    if (dy !== 0) {
+      if (chargeLimitSupported) {
+        if (focusSection === "chargeLimit" && dy > 0) {
+          chargeLimitPreview = -1
+          focusSection = "profiles"
+        } else if (focusSection === "profiles" && dy < 0) {
+          focusSection = "chargeLimit"
+        }
+      } else if (focusSection === "profiles") {
+        selectProfileByDelta(dy)
+      }
+      return
+    }
+
+    if (dx === 0) return
+    if (focusSection === "chargeLimit") previewChargeLimit(displayedChargeLimit + dx * 5)
+    else selectProfileByDelta(dx)
+  }
+
+  function activateCursor() {
+    if (!cursorActive) return
+    if (focusSection === "chargeLimit") {
+      if (chargeLimitPreview >= 0 && chargeLimitPreview !== chargeLimit)
+        setChargeLimit(chargeLimitPreview)
+    } else {
+      activateSelectedProfile()
+    }
   }
 
   function batteryIcon() {
@@ -145,8 +192,12 @@ Panel {
     // Keep last known good data if a refresh briefly returns nothing — happens
     // around AC plug/unplug events. Avoids the section collapsing mid-transition.
     if (Object.keys(next).length === 0) return
-    if (targetName === "battery") batteryInfo = next
-    else systemInfo = next
+    if (targetName === "battery") {
+      batteryInfo = next
+      if (!chargeLimitProc.running) chargeLimitPreview = -1
+    } else {
+      systemInfo = next
+    }
   }
 
   function updateProfiles(raw) {
@@ -167,6 +218,24 @@ Panel {
     if (!profile || actionProc.running) return
     actionProc.command = ["omarchy-powerprofiles-set", root.discharging ? "battery" : "ac", profile]
     actionProc.running = true
+  }
+
+  function previewChargeLimit(value) {
+    if (!chargeLimitSupported || chargeLimitProc.running) return
+    chargeLimitPreview = Model.clampChargeLimit(value)
+  }
+
+  function setChargeLimit(value) {
+    if (!chargeLimitSupported || chargeLimitProc.running) return
+    var limit = Model.clampChargeLimit(value)
+    chargeLimitMessage = ""
+    if (limit === chargeLimit) {
+      chargeLimitPreview = -1
+      return
+    }
+    chargeLimitPreview = limit
+    chargeLimitProc.command = ["omarchy-battery-charge-limit", String(limit)]
+    chargeLimitProc.running = true
   }
 
   function togglePercentage() {
@@ -196,10 +265,15 @@ Panel {
       var idx = profiles.indexOf(activeProfile)
       profileIndex = idx >= 0 ? idx : 0
       cursorActive = false
+      focusSection = chargeLimitSupported ? "chargeLimit" : "profiles"
+      chargeLimitPreview = -1
     }
   }
 
   onBatteryPresentChanged: if (!batteryPresent) close()
+  onChargeLimitSupportedChanged: {
+    if (!chargeLimitSupported && focusSection === "chargeLimit") focusSection = "profiles"
+  }
 
   visible: batteryPresent
   implicitWidth: batteryPresent ? button.implicitWidth : 0
@@ -226,6 +300,19 @@ Panel {
   Process {
     id: actionProc
     onExited: root.refresh()
+  }
+
+  Process {
+    id: chargeLimitProc
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.chargeLimitPreview = -1
+        root.chargeLimitMessage = "Could not apply charge limit."
+      }
+      root.refresh()
+    }
   }
 
   Timer { interval: 5000; running: root.opened; repeat: true; onTriggered: root.refresh() }
@@ -303,11 +390,9 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
-        if (!root.cursorActive) { root.cursorActive = true; return }
-        if (dx !== 0) root.selectProfileByDelta(dx)
-        else if (dy !== 0) root.selectProfileByDelta(dy)
+        root.moveCursor(dx, dy)
       }
-      onActivateRequested: if (root.cursorActive) root.activateSelectedProfile()
+      onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
@@ -448,8 +533,88 @@ Panel {
           }
         }
 
+        // ---------- Full-charge limit ----------
+        PanelSeparator {
+          foreground: root.bar.foreground
+        }
+
+        Column {
+          visible: root.chargeLimitSupported
+          width: parent.width
+          spacing: Style.space(6)
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(chargeLimitHeader.implicitHeight, chargeLimitValue.implicitHeight)
+
+            PanelSectionHeader {
+              id: chargeLimitHeader
+              text: "FULL CHARGE"
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+              id: chargeLimitValue
+              text: chargeLimitProc.running
+                ? "APPLYING…"
+                : root.displayedChargeLimit + "%" + (root.chargeLimitPreview >= 0 && root.chargeLimitPreview !== root.chargeLimit ? " · ENTER TO APPLY" : "")
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+
+          Text {
+            text: root.chargeLimitMessage || "Lower limits reduce time spent at 100%."
+            color: root.bar.foreground
+            opacity: root.chargeLimitMessage ? 0.85 : 0.6
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          CursorSurface {
+            id: chargeLimitRow
+            width: parent.width
+            height: chargeLimitSlider.implicitHeight + Style.spacing.controlGap
+            hasCursor: root.cursorActive && root.focusSection === "chargeLimit"
+            foreground: root.bar.foreground
+            outline: true
+
+            PanelSlider {
+              id: chargeLimitSlider
+              bar: root.bar
+              anchors.fill: parent
+              anchors.leftMargin: Style.space(6)
+              anchors.rightMargin: Style.space(6)
+              minimum: 50
+              maximum: 100
+              step: 5
+              tickCount: 6
+              value: root.displayedChargeLimit
+              integer: true
+              onMoved: function(v) { root.previewChargeLimit(v) }
+              onReleased: function(v) { root.setChargeLimit(v) }
+            }
+
+            HoverHandler {
+              onHoveredChanged: if (hovered) {
+                root.cursorActive = true
+                root.focusSection = "chargeLimit"
+              }
+            }
+          }
+        }
+
         // ---------- Power profile picker ----------
         PanelSeparator {
+          visible: root.chargeLimitSupported
           foreground: root.bar.foreground
         }
 
@@ -493,6 +658,7 @@ Panel {
                 onHovered: function(h) {
                   if (h) {
                     root.cursorActive = true
+                    root.focusSection = "profiles"
                     root.profileIndex = index
                   }
                 }

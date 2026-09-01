@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# omarchy:summary=Show or set the battery full-charge limit
+# omarchy:args=[50-100]
+# omarchy:examples=omarchy battery charge limit | omarchy battery charge limit 80
+
+set -euo pipefail
+
+PACKAGED_PATH=/usr/bin/omarchy-battery-charge-limit
+
+# Tests can point the unprivileged read path at a fixture. Never carry that
+# override into the privileged writer: its targets must remain fixed under
+# the kernel power-supply class.
+if (( EUID == 0 )); then
+  POWER_SUPPLY_PATH=/sys/class/power_supply
+else
+  POWER_SUPPLY_PATH="${OMARCHY_POWER_SUPPLY_PATH:-/sys/class/power_supply}"
+fi
+
+limit_files() {
+  local path supply_type
+
+  for path in "$POWER_SUPPLY_PATH"/*/charge_control_end_threshold; do
+    [[ -r $path ]] || continue
+    [[ -r ${path%/charge_control_end_threshold}/type ]] || continue
+    supply_type="$(<"${path%/charge_control_end_threshold}/type")"
+    [[ $supply_type == "Battery" ]] && printf '%s\n' "$path"
+  done
+}
+
+valid_limit() {
+  [[ $1 =~ ^[0-9]{2,3}$ ]] && ((10#$1 >= 50 && 10#$1 <= 100))
+}
+
+show_limit() {
+  local files=()
+  mapfile -t files < <(limit_files)
+
+  if (( ${#files[@]} == 0 )); then
+    echo "Battery charge limits are not supported by this hardware" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$(<"${files[0]}")"
+}
+
+write_limit() {
+  local limit="$1"
+  local files=()
+  local end_path start_path start previous_start actual
+
+  valid_limit "$limit" || {
+    echo "Charge limit must be a whole percentage from 50 to 100" >&2
+    return 2
+  }
+
+  mapfile -t files < <(limit_files)
+  if (( ${#files[@]} == 0 )); then
+    echo "Battery charge limits are not supported by this hardware" >&2
+    return 1
+  fi
+
+  for end_path in "${files[@]}"; do
+    start_path="${end_path%/charge_control_end_threshold}/charge_control_start_threshold"
+    previous_start=""
+
+    # The kernel requires the start threshold to remain below the end
+    # threshold on hardware that exposes both. Lower it first when necessary,
+    # leaving five percentage points of hysteresis.
+    if [[ -r $start_path && -w $start_path ]]; then
+      start="$(<"$start_path")"
+      if [[ $start =~ ^[0-9]{1,3}$ ]] && ((10#$start >= 10#$limit)); then
+        previous_start="$start"
+        (( start = 10#$limit - 5 ))
+        printf '%s\n' "$start" >"$start_path"
+      fi
+    fi
+
+    if ! printf '%s\n' "$((10#$limit))" >"$end_path"; then
+      [[ -z $previous_start ]] || printf '%s\n' "$previous_start" >"$start_path" || true
+      return 1
+    fi
+  done
+
+  # Drivers may round to a supported level. Return what the first battery
+  # actually accepted rather than echoing the requested value.
+  actual="$(<"${files[0]}")"
+  printf '%s\n' "$actual"
+}
+
+require_root() {
+  local limit="$1"
+
+  if [[ -t 0 ]]; then
+    exec sudo "$PACKAGED_PATH" "$limit"
+  else
+    exec pkexec "$PACKAGED_PATH" "$limit"
+  fi
+}
+
+main() {
+  case "$#" in
+  0)
+    show_limit
+    ;;
+  1)
+    valid_limit "$1" || {
+      echo "Charge limit must be a whole percentage from 50 to 100" >&2
+      return 2
+    }
+    [[ -n $(limit_files) ]] || {
+      echo "Battery charge limits are not supported by this hardware" >&2
+      return 1
+    }
+
+    if (( EUID == 0 )); then
+      write_limit "$1"
+    else
+      require_root "$1"
+    fi
+    ;;
+  *)
+    echo "Usage: omarchy-battery-charge-limit [50-100]" >&2
+    return 2
+    ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

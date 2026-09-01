@@ -9,6 +9,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 mkdir -p "$tmp_dir/bin"
 mkdir -p "$tmp_dir/power/BAT0"
+printf 'Battery\n' >"$tmp_dir/power/BAT0/type"
 printf '900000\n' >"$tmp_dir/power/BAT0/current_now"
 printf '12000000\n' >"$tmp_dir/power/BAT0/voltage_now"
 cat >"$tmp_dir/bin/upower" <<'STUB'
@@ -43,6 +44,13 @@ grep -Fx $'state\tdischarging' <<<"$shell_output" >/dev/null || fail "battery st
 grep -Fx $'rate\t10.8W' <<<"$shell_output" >/dev/null || fail "battery status reports live sysfs power rate"
 grep -Fx $'size\t56Wh' <<<"$shell_output" >/dev/null || fail "battery status reports full capacity"
 grep -Fx $'time\t2h 30m' <<<"$shell_output" >/dev/null || fail "battery status reports remaining time"
+! grep -F $'chargeLimit\t' <<<"$shell_output" >/dev/null || fail "battery status hides unavailable charge controls"
+
+printf '80\n' >"$tmp_dir/power/BAT0/charge_control_end_threshold"
+limited_output=$(OMARCHY_POWER_SUPPLY_PATH="$tmp_dir/power" PATH="$tmp_dir/bin:$PATH" "$ROOT/bin/omarchy-battery-status" --shell)
+grep -Fx $'threshold\t80%' <<<"$limited_output" >/dev/null || fail "battery status reports the active charge threshold"
+grep -Fx $'chargeLimit\t80' <<<"$limited_output" >/dev/null || fail "battery status exposes a controllable full-charge limit"
+pass "battery status exposes charge-limit controls only when supported"
 
 if matches=$(rg -n 'omarchy-battery-(capacity|remaining|remaining-time)' "$ROOT/bin" "$ROOT/test" "$ROOT/shell" "$ROOT/docs"); then
   fail "battery status owns capacity and remaining calculations" "$matches"

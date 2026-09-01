@@ -49,6 +49,12 @@ function batteryFraction(device) {
   return device && device.isPresent ? Math.max(0, Math.min(1, device.percentage)) : 0
 }
 
+function clampChargeLimit(value) {
+  var parsed = Math.round(Number(value))
+  if (!Number.isFinite(parsed)) return 100
+  return Math.max(50, Math.min(100, parsed))
+}
+
 function chargeThresholdActive(device, onBattery, states) {
   var d = device || {}
   var s = states || {}
@@ -97,6 +103,7 @@ if (typeof module !== "undefined") {
     parseProfiles: parseProfiles,
     profileIcon: profileIcon,
     batteryFraction: batteryFraction,
+    clampChargeLimit: clampChargeLimit,
     chargeThresholdActive: chargeThresholdActive,
     batteryIcon: batteryIcon,
     modeLabel: modeLabel

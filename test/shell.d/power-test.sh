@@ -22,6 +22,9 @@ assertDeepEqual(
 
 assert(power.profileIcon('performance').length > 0, 'power maps profile icons')
 assertEqual(power.batteryFraction({ isPresent: true, percentage: 1.5 }), 1, 'power clamps battery fraction')
+assertEqual(power.clampChargeLimit(45), 50, 'power clamps the minimum full-charge limit')
+assertEqual(power.clampChargeLimit(84.6), 85, 'power rounds the full-charge limit')
+assertEqual(power.clampChargeLimit('bad'), 100, 'power falls back to a full charge for invalid limits')
 
 assert(power.chargeThresholdActive({ isPresent: true, percentage: 0.8, state: states.PendingCharge }, false, states), 'power detects threshold by pending charge state')
 assert(power.chargeThresholdActive({ isPresent: true, percentage: 0.8, state: states.Charging, changeRate: 0.1, timeToFull: 120 }, false, states), 'power detects threshold by stalled charging')
@@ -48,4 +51,10 @@ assert(/Math\.round\(root\.batteryFraction \* 100\) \+ "% " \+ root\.batteryIcon
 assert(/openPanelIndicatorWidth:.*showPercentage.*button\.glyphPaintedWidth : 0/.test(panelSource), 'power spans the open-panel mark across the painted percentage block')
 assert(/IpcHandler[\s\S]*?function togglePercentage\(\) \{ root\.togglePercentage\(\) \}/.test(panelSource), 'power exposes togglePercentage over IPC')
 assert(/manageIpc: false/.test(panelSource), 'power owns its IPC handler so it can extend the target methods')
+assert(/PanelSectionHeader[\s\S]*?text: "FULL CHARGE"[\s\S]*?PanelSlider/.test(panelSource), 'power presents the full-charge slider')
+assert(/minimum: 50[\s\S]*?maximum: 100[\s\S]*?onReleased: function\(v\) \{ root\.setChargeLimit\(v\) \}/.test(panelSource), 'power applies supported charge limits on slider release')
+assert(/command = \["omarchy-battery-charge-limit", String\(limit\)\]/.test(panelSource), 'power uses the validated charge-limit command')
+assert(/visible: root\.chargeLimitSupported/.test(panelSource), 'power hides charge-limit controls on unsupported hardware')
+assert(/if \(limit === chargeLimit\)[\s\S]*?chargeLimitPreview = -1[\s\S]*?return/.test(panelSource), 'power does not authorize a no-op charge-limit change')
+assert(/exitCode !== 0[\s\S]*?chargeLimitMessage = "Could not apply charge limit\."/.test(panelSource), 'power reports a rejected or cancelled charge-limit change')
 JS
