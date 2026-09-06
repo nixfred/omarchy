@@ -69,47 +69,19 @@ ShellRoot {
     pluginRegistry.pluginsChanged()
   }
 
-  function applyShellConfig() {
-    // Decide which source is canonical: a valid user shell.json overrides
-    // defaults entirely; otherwise fall back to defaults. We do not deep-merge.
-    var defaults = Util.isPlainObject(defaultsConfig) ? defaultsConfig : builtinShellConfig
-    var user = null
-    var userText = userConfigFile.text() || ""
-    if (userText.trim()) {
-      try {
-        var parsed = JSON.parse(userText)
-        if (Util.isPlainObject(parsed) && parsed.version === 1) user = parsed
-        else if (Util.isPlainObject(parsed)) console.warn("shell.json missing version: 1, using defaults")
-      } catch (e) {
-        console.warn("shell.json parse failed, using defaults:", e)
-      }
-    }
-    shellConfig = user || defaults
-  }
-
   function loadDefaults(raw) {
-    var text = String(raw || "").trim()
-    if (!text) {
-      defaultsConfig = builtinShellConfig
-      applyShellConfig()
-      return
-    }
     try {
-      var parsed = JSON.parse(text)
-      if (Util.isPlainObject(parsed) && parsed.version === 1) defaultsConfig = parsed
-      else defaultsConfig = builtinShellConfig
-    } catch (e) {
-      console.warn("default shell.json parse failed, using builtin:", e)
+      var parsed = JSON.parse(String(raw || ""))
+      defaultsConfig = configStore.valid(parsed) ? parsed : builtinShellConfig
+    } catch (error) {
       defaultsConfig = builtinShellConfig
     }
-    applyShellConfig()
   }
 
   function persistShellConfig(nextConfig) {
     var payload = JSON.parse(JSON.stringify(nextConfig))
     payload.version = 1
-    shellConfig = payload
-    userConfigFile.setText(JSON.stringify(payload, null, 2) + "\n")
+    return configStore.commit(payload)
   }
 
   readonly property var barConfig: shellConfig && Util.isPlainObject(shellConfig.bar) ? shellConfig.bar : builtinShellConfig.bar
@@ -120,22 +92,19 @@ ShellRoot {
     watchChanges: true
     printErrors: false
     onLoaded: shell.loadDefaults(text())
-    onLoadFailed: function(error) {
-      console.warn("default shell.json load failed: " + error + " path=" + shell.defaultsPath)
-      shell.loadDefaults("")
-    }
+    onLoadFailed: shell.loadDefaults("")
     onFileChanged: reload()
   }
 
-  FileView {
-    id: userConfigFile
+  ShellConfigStore {
+    id: configStore
     path: shell.userConfigPath
-    watchChanges: true
-    atomicWrites: true
-    printErrors: false
-    onLoaded: shell.applyShellConfig()
-    onLoadFailed: function(error) { shell.applyShellConfig() }
-    onFileChanged: reload()
+    defaults: shell.defaultsConfig
+    onValueChanged: shell.shellConfig = value
+    onFailed: function(message) {
+      Util.execArgv(["omarchy-notification-send", "-u", "critical",
+        "Desktop settings could not be saved", message])
+    }
   }
 
   Component.onCompleted: {
@@ -892,7 +861,7 @@ ShellRoot {
     }
 
     function reloadConfig(): string {
-      userConfigFile.reload()
+      configStore.reload()
       return "ok"
     }
 
@@ -991,6 +960,21 @@ ShellRoot {
     // Returns the effective shell.json content as JSON. Useful for debugging
     // and for CLI tools that want to inspect the merged state without
     // re-implementing the load logic.
+    // Agent/editor writes compare against the live configuration so a stale
+    // whole-file snapshot cannot replace a layout changed since it was read.
+    function compareAndSetShellConfig(expectedJson: string, nextJson: string): string {
+      try {
+        var expected = JSON.parse(expectedJson)
+        var next = JSON.parse(nextJson)
+        return configStore.compareAndSet(expected, next)
+      } catch (error) { return "invalid configuration: " + error }
+    }
+
+    function configPersistenceState(): string {
+      return JSON.stringify({ ready: configStore.ready, saving: configStore.saving,
+        writable: configStore.writable, error: configStore.lastError })
+    }
+
     function listShellConfig(): string {
       return JSON.stringify(shell.shellConfig || {})
     }

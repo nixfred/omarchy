@@ -47,3 +47,9 @@ unicode characters. Agent file-editing tools can strip multi-byte codepoints
 in some positions — do **not** rewrite widget files wholesale through those
 tools. For glyph fixes, make a targeted edit with the surrounding context, or
 use a Python script that inserts codepoints via `chr(0xXXXXX)`.
+
+## Preserve desktop configuration while developing
+
+Before changing a running desktop's `shell.json`, read a fresh live snapshot with `omarchy shell config-edit snapshot <file>`. Use `omarchy bar set` / `put` for supported individual settings, or apply a minimal edit with `omarchy shell config-edit apply <snapshot> <edited-file>`. The latter rejects stale snapshots and preserves plugin order by default. Use `--allow-layout-change` only when adding, removing, replacing, or moving plugins is part of the requested task. See `docs/shell-config-persistence.md`.
+
+Never restore a whole old configuration to undo one change, and never set the immutable flag on `shell.json`. Both can erase the user's newer layout choices. A successful QML mutation or IPC acknowledgement means a save was accepted; check persistence completion when verifying a write.
