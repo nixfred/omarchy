@@ -1,0 +1,73 @@
+#!/bin/bash
+
+# omarchy:summary=Safely snapshot or apply desktop configuration without stale layout overwrites
+# omarchy:group=shell
+# omarchy:name=config-edit
+# omarchy:args=snapshot <file> | apply <snapshot> <edited-file> [--allow-layout-change]
+# omarchy:examples=omarchy shell config-edit snapshot /tmp/shell-base.json | omarchy shell config-edit apply /tmp/shell-base.json /tmp/shell-edited.json
+
+exec python3 - "$@" <<'PY'
+import argparse
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+parser = argparse.ArgumentParser(description="Apply small edits against a fresh live shell snapshot. Plugin order is protected by default.")
+commands = parser.add_subparsers(dest="command", required=True)
+snapshot = commands.add_parser("snapshot")
+snapshot.add_argument("file", type=Path)
+apply = commands.add_parser("apply")
+apply.add_argument("snapshot", type=Path)
+apply.add_argument("edited_file", type=Path)
+apply.add_argument("--allow-layout-change", action="store_true", help="Permit intentionally adding, removing, replacing, or moving plugins")
+args = parser.parse_args()
+
+def ipc(method, *values):
+    return subprocess.check_output(["omarchy-shell", "shell", method, *values], text=True, timeout=5).strip()
+
+def encode(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+def order(config):
+    def ids(entries):
+        return [e.get("id") if isinstance(e, dict) else e for e in entries]
+    bar = config.get("bar", {})
+    return (bar.get("id"), {key: ids(entries) for key, entries in bar.get("layout", {}).items()}, ids(config.get("plugins", [])))
+
+try:
+    state = json.loads(ipc("configPersistenceState"))
+    if not state["ready"] or state["saving"]:
+        raise ValueError("Desktop configuration is loading or saving. Retry after it finishes.")
+    live = json.loads(ipc("listShellConfig"))
+    if args.command == "snapshot":
+        args.file.write_text(json.dumps(live, ensure_ascii=False, indent=2) + "\n")
+        print(f"Saved current live configuration to {args.file}")
+    else:
+        base = json.loads(args.snapshot.read_text())
+        edited = json.loads(args.edited_file.read_text())
+        if base != live:
+            raise ValueError("Configuration changed since the snapshot. Take a new snapshot and reapply only your intended edit.")
+        if not args.allow_layout_change and order(base) != order(edited):
+            raise ValueError("Plugin order/membership changed. Keep the existing layout, or use --allow-layout-change for an intentional layout edit.")
+        result = ipc("compareAndSetShellConfig", encode(live), encode(edited))
+        if result != "accepted":
+            raise ValueError(result)
+        deadline = time.monotonic() + 5
+        while True:
+            state = json.loads(ipc("configPersistenceState"))
+            if state["error"]:
+                raise ValueError(state["error"])
+            if not state["saving"]:
+                break
+            if time.monotonic() >= deadline:
+                raise ValueError("Save is still pending; verify configPersistenceState before doing anything else.")
+            time.sleep(0.05)
+        if json.loads(ipc("listShellConfig")) != edited:
+            raise ValueError("Configuration changed during save. Inspect the live state before retrying.")
+        print("Saved and verified desktop configuration.")
+except (ValueError, OSError, subprocess.SubprocessError) as error:
+    print(f"omarchy shell config-edit: {error}", file=sys.stderr)
+    sys.exit(1)
+PY
