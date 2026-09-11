@@ -45,6 +45,28 @@ Item {
   // Fullscreen is decided per output below, because it only covers its own.
   readonly property bool sessionObscured: lockActive || screensaverActive
 
+  // A video wallpaper's sound track plays only when it is asked for. Upstream
+  // gates it on the first screen alone, so any wallpaper that happens to carry
+  // audio starts playing it the moment it is set, with nothing in the UI to
+  // stop it. Read shell.json `background.videoAudio` instead, and treat an
+  // absent key as silence — a wallpaper should never surprise you with sound.
+  readonly property var backgroundConfig: shell && shell.shellConfig
+    && Util.isPlainObject(shell.shellConfig.background) ? shell.shellConfig.background : null
+  readonly property bool videoAudio: backgroundConfig ? backgroundConfig.videoAudio === true : false
+
+  function setVideoAudio(enabled) {
+    if (!shell || typeof shell.mutateShellConfig !== "function") return false
+    shell.mutateShellConfig(function(config) {
+      if (!Util.isPlainObject(config.background)) config.background = {}
+      config.background.videoAudio = enabled === true
+    })
+    return true
+  }
+
+  function toggleVideoAudio() {
+    return setVideoAudio(!videoAudio)
+  }
+
   function isVideo(path) {
     return Util.isVideoPath(path)
   }
@@ -178,6 +200,17 @@ Item {
     function themeTransition(fromPath: string, path: string, finalPath: string, colorsB64: string, shellB64: string): void {
       root.transitionBackgroundWithTheme(fromPath, path, finalPath, colorsB64, shellB64)
     }
+
+    // Sound for a video wallpaper. Reported as on/off rather than silently, so
+    // a caller can show the state it just produced without reading it back.
+    function sound(state: string): string {
+      var want = String(state || "").toLowerCase()
+      if (want === "on" || want === "true") root.setVideoAudio(true)
+      else if (want === "off" || want === "false") root.setVideoAudio(false)
+      else if (want === "toggle") root.toggleVideoAudio()
+      else if (want !== "" && want !== "status") return "usage: audio on|off|toggle|status"
+      return root.videoAudio ? "on" : "off"
+    }
   }
 
   Timer {
@@ -265,7 +298,7 @@ Item {
         path: root.displayedBackground
         reloads: root.displayedReloads
         playbackEnabled: !root.sessionObscured && !root.powerSaverActive && !panel.fullscreenHere
-        audioEnabled: panel.firstScreen
+        audioEnabled: panel.firstScreen && root.videoAudio
         onReadyChanged: {
           if (ready && root.finishingTransition) {
             root.incomingBackground = ""
