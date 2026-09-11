@@ -15,15 +15,28 @@ Item {
   property bool reloading: false
   readonly property var current: video ? videoLoader.item : imageLoader.item
   readonly property bool ready: current ? current.ready : false
-  readonly property bool video: Util.isVideoPath(path)
+  // A remote source is always video here. It cannot be sniffed by extension —
+  // a streaming URL carries a query string and usually no extension at all —
+  // and it must never be handed to the still loader, which would try to decode
+  // a video stream as an image.
+  function isRemotePath(value) {
+    return /^https?:\/\//i.test(String(value || ""))
+  }
+
+  readonly property bool remote: isRemotePath(path)
+  readonly property bool video: remote || Util.isVideoPath(path)
   // Cache-bust images selected in a running lock session. FFmpeg treats the
   // query as part of a local filename, so videos must keep their plain URL.
   // Each URL is empty for the other kind, so a switch never hands the still
   // loader a video, or the player a still, in the moment before it unloads.
   // Both test the path directly: going through `video` lets a URL evaluate
   // against the stale flag and leak the wrong file for one pass.
-  readonly property url imageUrl: path && !Util.isVideoPath(path) ? Util.fileUrl(path) + (version ? "?v=" + version : "") : ""
-  readonly property url videoUrl: path && Util.isVideoPath(path) ? Util.fileUrl(path) : ""
+  readonly property url imageUrl: path && !isRemotePath(path) && !Util.isVideoPath(path)
+    ? Util.fileUrl(path) + (version ? "?v=" + version : "") : ""
+  // A remote URL is passed through untouched: fileUrl would prefix it with
+  // file:// and the query it carries is part of the request, not a filename.
+  readonly property url videoUrl: !path ? ""
+    : (isRemotePath(path) ? path : (Util.isVideoPath(path) ? Util.fileUrl(path) : ""))
 
   Loader {
     id: imageLoader
