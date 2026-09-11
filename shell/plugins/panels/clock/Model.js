@@ -21,6 +21,8 @@ var WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "fr
 var CLOCK_FORMATS = [
   "dddd HH:mm",
   "dddd h:mm AP",
+  "dddd HH:mm:ss",
+  "dddd h:mm:ss AP",
   "HH:mm",
   "h:mm AP",
   "ddd d MMM HH:mm",
@@ -38,6 +40,15 @@ var VERTICAL_CLOCK_FORMATS = [
   "dd\nMMM\n'W'ww\n''yy",
   "HH\nmm"
 ]
+
+// Whether a format prints seconds, so the widget can tick once a second only
+// for the formats that show them. Quoted literals go first: the s in a 'Sat'
+// is text rather than a token, and an opening quote with no closing one runs
+// to the end of the format the way Qt reads it.
+function clockNeedsSeconds(format) {
+  var text = String(format === undefined || format === null ? "" : format)
+  return /s/.test(text.replace(/'[^']*'?/g, ""))
+}
 
 function clockFormats(vertical) {
   return vertical ? VERTICAL_CLOCK_FORMATS.slice() : CLOCK_FORMATS.slice()
@@ -160,6 +171,47 @@ function yearProgressPercent(year, month, day) {
   return Math.round(yearProgress(year, month, day) * 100)
 }
 
+// Share of the year already behind you, to the millisecond. The day-quantized
+// figure above cannot back a decimal read-out: it steps 0.27% at midnight and
+// then sits still for 24 hours, so every digit after the point would be
+// frozen most of the time. Measured between the two January firsts in local
+// time, so a DST year (8759 or 8761 hours long) still lands on 100%.
+function yearProgressAt(date) {
+  var at = (date instanceof Date && isFinite(date.getTime())) ? date : new Date()
+  var year = at.getFullYear()
+  var start = new Date(year, 0, 1).getTime()
+  var end = new Date(year + 1, 0, 1).getTime()
+  if (!(end > start)) return 0
+  return Math.max(0, Math.min(1, (at.getTime() - start) / (end - start)))
+}
+
+// How many decimals the year read-out carries. Two by default: 0.01% of a
+// year is ~53 minutes, so the last digit differs between any two glances at
+// the panel without ever moving while one is open. One decimal would be 8.8
+// hours -- the same number at breakfast and at dinner, which is the one thing
+// a progress rail must not do. Six is the ceiling because 0.000001% is 0.32
+// seconds, past reading speed.
+var YEAR_PERCENT_DECIMALS = 2
+var YEAR_PERCENT_DECIMALS_MAX = 6
+
+function clampYearPercentDecimals(value) {
+  var places = Math.round(Number(value))
+  if (!isFinite(places)) return YEAR_PERCENT_DECIMALS
+  return Math.max(0, Math.min(YEAR_PERCENT_DECIMALS_MAX, places))
+}
+
+// The clock behind the read-out only needs to tick every second once a digit
+// moves faster than a minute, which starts at four decimals (31.5s per step);
+// three is still 5.3 minutes. Same bargain as clockNeedsSeconds above -- pay
+// for the wake-ups only where they show.
+function yearPercentNeedsSeconds(decimals) {
+  return clampYearPercentDecimals(decimals) >= 4
+}
+
+function yearProgressPercentText(date, decimals) {
+  return (yearProgressAt(date) * 100).toFixed(clampYearPercentDecimals(decimals))
+}
+
 // Memento mori. The default span is a round number rather than anything from
 // an actuarial table: the point of the bar is the reminder, not the
 // arithmetic, and whoever wants a different number can say so.
@@ -280,6 +332,10 @@ if (typeof module !== "undefined") {
     daysInYear: daysInYear,
     yearProgress: yearProgress,
     yearProgressPercent: yearProgressPercent,
+    yearProgressAt: yearProgressAt,
+    clampYearPercentDecimals: clampYearPercentDecimals,
+    yearPercentNeedsSeconds: yearPercentNeedsSeconds,
+    yearProgressPercentText: yearProgressPercentText,
     parseAge: parseAge,
     parseBirthYear: parseBirthYear,
     ageFromBirthYear: ageFromBirthYear,
@@ -289,6 +345,7 @@ if (typeof module !== "undefined") {
     monthGrid: monthGrid,
     stepMonth: stepMonth,
     clockFormats: clockFormats,
+    clockNeedsSeconds: clockNeedsSeconds,
     clockFormatRing: clockFormatRing,
     nextClockFormat: nextClockFormat,
     isoWeekLiteral: isoWeekLiteral

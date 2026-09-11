@@ -575,6 +575,12 @@ ShellRoot {
       barConfig: shell.publicBarConfig(),
       idleConfig: shell.publicIdleConfigFor(manifest),
       _serviceLookup: function(requestedId) {
+        // vic patch (2026-09-10): Omarchy 4.0.3 hands replacement bars a
+        // service-less facade, which blanked burnbar, beatdeck, pr-hunter, sandman,
+        // omamail and the weather radar under nixfred.menubar-overload. That bar is
+        // Fred-authored, so it is trusted like the built-in bar for service lookup.
+        // shell.serviceFor never publishes lock/polkit, so no auth service leaks.
+        if (key === "nixfred.menubar-overload") return shell.serviceFor(requestedId)
         return allowOwnService ? shell.pluginServiceFor(key, requestedId) : null
       },
       _firstPartyServiceLookup: function(requestedId) {

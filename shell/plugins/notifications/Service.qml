@@ -5,6 +5,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import Quickshell.Hyprland
 import Quickshell.Services.Notifications
 import qs.Commons
 
@@ -95,8 +96,8 @@ Item {
   // many `showHistory` can replay.
   readonly property int historyLimit: 10
 
-  readonly property int lowPopupDuration: 5000
-  readonly property int normalPopupDuration: 8000
+  readonly property int lowPopupDuration: 6000
+  readonly property int normalPopupDuration: 9000
   readonly property int maxPopupDuration: 30000
 
   function durationFor(urgency, expireTimeout) {
@@ -392,8 +393,48 @@ Item {
     // libnotify action — they just expect clicking the notification to
     // focus their window. Fall back to focusing the sending app by class so
     // that click-to-jump actually works.
-    if (!invoked) focusApp(entry)
+    // vic patch 2026-08-21: misc:focus_on_activate=false (looknfeel.lua) makes
+    // Hyprland DENY the xdg-activation the "default" action triggers, but it
+    // still emits `urgent>>ADDR` for the exact window that asked. Catch that
+    // for a short window after the click and focus it by address — precise
+    // even when the sender has many windows (kitty/Claude Code). If no urgent
+    // arrives (app never requested activation), fall back to class match.
+    if (invoked) armUrgentFocus(entry)
+    else focusApp(entry)
     dismissPopup(index)
+  }
+
+  property var urgentFocusEntry: null
+  function armUrgentFocus(entry) {
+    // Plain copy: the model row is deleted by dismissPopup() right after
+    // and QML nulls `var` references to destroyed objects.
+    urgentFocusEntry = { app: String(entry && entry.app ? entry.app : "") }
+    urgentFocusTimer.restart()
+  }
+  Timer {
+    id: urgentFocusTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      var entry = service.urgentFocusEntry
+      if (entry) console.log("[notif-urgent] no urgent event, class fallback:", entry.app)
+      service.urgentFocusEntry = null
+      if (entry) service.focusApp(entry)
+    }
+  }
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (!service.urgentFocusEntry || !event || String(event.name) !== "urgent") return
+      var addr = String(event.data || "").trim()
+      console.log("[notif-urgent] caught urgent for", addr)
+      if (!addr) return
+      service.urgentFocusEntry = null
+      urgentFocusTimer.stop()
+      // Hyprland 0.56+ (Lua config) rejects the classic `focuswindow`
+      // dispatcher; mirror omarchy-hyprland-focus-app and use hl.dsp.focus.
+      Hyprland.dispatch('hl.dsp.focus({ window = "address:0x' + addr.replace(/^0x/, "") + '" })')
+    }
   }
 
   // Try to focus an existing Hyprland window matching the notification's

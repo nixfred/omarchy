@@ -168,7 +168,11 @@ PanelWindow {
   function fittedContentHeight(implicitHeight, cap) {
     var desired = Math.max(root.verticalContentInset, (Number(implicitHeight) || 0) + root.verticalContentInset)
     var maxHeight = root.availableCardHeight > 0 ? root.availableCardHeight : desired
-    if (cap !== undefined && Number(cap) > 0) maxHeight = Math.min(maxHeight, Number(cap))
+    // vic patch (2026-09-04): a caller's `cap` is advisory only. A panel must
+    // never scroll while the screen still has room, so the sole ceiling is
+    // availableCardHeight (screen minus bar minus margins). Callers that pass
+    // Style.space(560) etc. now grow to fit their content instead of clipping.
+    // Fred: "I should never have to scroll to see what's on the screen."
     return Math.round(Math.min(desired, maxHeight))
   }
 

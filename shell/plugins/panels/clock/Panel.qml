@@ -43,10 +43,21 @@ Panel {
   readonly property date viewDate: new Date(viewYear, viewMonth, 1)
   readonly property bool viewingCurrentMonth: viewYear === today.getFullYear() && viewMonth === today.getMonth()
 
-  // Pinned to today, not to the month being browsed — stepping through the
-  // calendar does not change how much of the year is gone.
-  readonly property real yearDone: Model.yearProgress(today.getFullYear(), today.getMonth(), today.getDate())
-  readonly property int yearDonePercent: Model.yearProgressPercent(today.getFullYear(), today.getMonth(), today.getDate())
+  // Pinned to now, not to the month being browsed — stepping through the
+  // calendar does not change how much of the year is gone. Read off the clock
+  // rather than `today` because `today` only moves at midnight, and the
+  // read-out below resolves far finer than a day.
+  readonly property real yearDone: Model.yearProgressAt(clock.date)
+  readonly property string yearDoneText: Model.yearProgressPercentText(clock.date, root.yearPercentDecimals)
+
+  // Two decimals by default. One hundredth of a percent of a year is ~53
+  // minutes, so the figure reads differently between any two visits to the
+  // panel while never moving under the eye; a single decimal is 8.8 hours and
+  // would show the same number at breakfast and at dinner. Raise it toward 6
+  // in shell.json to watch the year drain in closer to real time — the clock
+  // below starts ticking per-second at 4, where a digit finally moves faster
+  // than a minute.
+  readonly property int yearPercentDecimals: Model.clampYearPercentDecimals(setting("yearPercentDecimals", 2))
 
   // Memento mori, for anyone who goes looking: double-tapping the year bar
   // asks for a birth year and a life expectancy, and a second bar tracks one
@@ -226,7 +237,7 @@ Panel {
 
   SystemClock {
     id: clock
-    precision: SystemClock.Minutes
+    precision: Model.yearPercentNeedsSeconds(root.yearPercentDecimals) ? SystemClock.Seconds : SystemClock.Minutes
     onDateChanged: {
       if (Model.keyForDate(clock.date) === String(root.todayKey)) return
       var followToday = root.viewingCurrentMonth
@@ -433,7 +444,7 @@ Panel {
                 visible: !root.editingLife
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.yearDonePercent + "%"
+                text: root.yearDoneText + "%"
                 color: root.contentForeground
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.bodySmall
