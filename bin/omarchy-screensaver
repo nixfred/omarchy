@@ -1,26 +1,40 @@
 #!/bin/bash
 
-# omarchy:summary=Run the Omarchy screensaver using random effects from TTE.
+# omarchy:summary=Run ORRERY and text effects in a fixed, manually advanced order.
 
-screensaver_in_focus() {
-  hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
+stop_effect() {
+  if [[ -n ${effect_pid:-} ]]; then
+    kill "$effect_pid" 2>/dev/null || true
+    wait "$effect_pid" 2>/dev/null || true
+    effect_pid=""
+  fi
 }
 
 exit_screensaver() {
+  trap '' SIGINT SIGTERM SIGHUP SIGQUIT
+  stop_effect
+  [[ -z ${saved_tty:-} ]] || stty "$saved_tty" 2>/dev/null
+  printf '\033[0m\033[?25h'
   hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null || hyprctl keyword cursor:invisible false &>/dev/null || true
   pkill -x ttfx 2>/dev/null
   pkill -f '[o]rg.omarchy.screensaver' 2>/dev/null
   exit 0
 }
 
-# Exit the screensaver on signals and input from keyboard and mouse
+# Only Escape exits on input. Explicit process-stop signals still clean up.
 trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
 
 printf '\033]11;rgb:00/00/00\007'  # Set background color to black
 
 hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null || hyprctl keyword cursor:invisible true &>/dev/null
 
-tty=$(tty 2>/dev/null)
+saved_tty=$(stty -g)
+# Disable terminal-generated interrupts too: Ctrl+C is an ignored key here.
+stty -echo -icanon -isig min 1 time 0
+
+read_action() {
+  action=$(python3 "$HOME/.local/share/omarchy-savers/input.py")
+}
 
 # Terminals allocate the pty at the default 80x24 and only resize it once the
 # compositor has told the window how big it is. ttfx measures the terminal once,
@@ -35,14 +49,95 @@ wait_for_terminal_resize() {
 
 wait_for_terminal_resize
 
-while true; do
-  ttfx -i ~/.config/omarchy/branding/screensaver.txt \
-    --frame-rate 120 --canvas-width 0 --canvas-height 0 --reuse-canvas --anchor-canvas c --anchor-text c\
-    --random-effect --no-eol --no-restore-cursor &
-
-  while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null; do
-    if read -n1 -t 1 || ! screensaver_in_focus; then
-      exit_screensaver
+orrery="$HOME/Projects/screensaver.nixfred/bin/orrery"
+# ORRERY, four terminal classics, then every text effect alphabetically.
+effects=(
+  asciiquarium cbonsai cmatrix pipes
+  beams binarypath blackhole bouncyballs bubbles burn colorshift crumble
+  decrypt errorcorrect expand fireworks highlight laseretch matrix middleout
+  orbittingvolley overflow pour print rain randomsequence rings scattered
+  slice slide smoke spotlights spray swarm sweep synthgrid thunderstorm
+  unstable vhstape waves wipe
+)
+selection=0
+custom_act=0
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy"
+state_file="$state_dir/screensaver-selection"
+if [[ -r $state_file ]]; then
+  read -r saved_effect saved_act < "$state_file"
+  if [[ $saved_act =~ ^[0-5]$ ]]; then
+    if [[ $saved_effect == "orrery" ]]; then
+      custom_act=$saved_act
+    else
+      for i in "${!effects[@]}"; do
+        if [[ ${effects[i]} == "$saved_effect" ]]; then
+          selection=$((i + 1))
+          custom_act=$saved_act
+          break
+        fi
+      done
     fi
+  fi
+fi
+
+remember_selection() {
+  local temporary
+  mkdir -p "$state_dir" || return
+  temporary=$(mktemp "$state_file.XXXXXX") || return
+  printf '%s %s\n' "$1" "$custom_act" > "$temporary"
+  mv -f -- "$temporary" "$state_file"
+}
+
+while true; do
+  if (( selection == 0 )); then
+    if [[ ! -x $orrery ]]; then
+      selection=1
+      continue
+    fi
+    # The custom saver owns keyboard input while it runs. Status 75 means
+    # next; normal exit means Escape. Both renderers share this same window.
+    remember_selection orrery
+    stty "$saved_tty" 2>/dev/null
+    "$orrery" --act "$custom_act" --next-exits --no-refocus
+    result=$?
+    [[ $result == 75 ]] || exit_screensaver
+    custom_act=$(( (custom_act + 1) % 6 ))
+    selection=1
+    stty -echo -icanon -isig min 1 time 0
+    printf '\033[2J\033[H'
+  fi
+
+  effect=${effects[selection - 1]}
+  remember_selection "$effect"
+  case $effect in
+  asciiquarium) command=(/usr/bin/asciiquarium) ;;
+  cbonsai) command=("$HOME/.local/bin/cbonsai" -l -i) ;;
+  cmatrix) command=(/usr/bin/cmatrix -a -b -u 4) ;;
+  pipes) command=("$HOME/.local/bin/pipes.sh" -p 4 -f 40) ;;
+  *) command=() ;;
+  esac
+  if (( ${#command[@]} )); then
+    python3 "$HOME/.local/share/omarchy-savers/render.py" "${command[@]}" </dev/null &
+  else
+    ttfx -i ~/.config/omarchy/branding/screensaver.txt \
+      --frame-rate 120 --canvas-width 0 --canvas-height 0 --reuse-canvas --anchor-canvas c --anchor-text c\
+      --no-eol --no-restore-cursor "$effect" </dev/null &
+  fi
+  effect_pid=$!
+
+  # Finishing an animation is not a request to change savers. Leave its
+  # final frame displayed and keep listening until n/N or Escape arrives.
+  while true; do
+    read_action
+    case $action in
+    quit) exit_screensaver ;;
+    next)
+      stop_effect
+      printf '\033[2J\033[H'
+      break
+      ;;
+    esac
   done
+  stop_effect
+  selection=$(( (selection + 1) % (${#effects[@]} + 1) ))
 done
