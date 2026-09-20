@@ -10,9 +10,11 @@ omarchy-shell lock lock >/dev/null
 # Set keyboard layout to default (first layout)
 hyprctl switchxkblayout all 0 > /dev/null 2>&1
 
-# Ensure 1password is locked. Use timeout because `1password --lock` can
-# otherwise leave a full Electron helper tree running after each lock.
-if pgrep -x "1password" >/dev/null && omarchy-cmd-present 1password; then
+# 1Password stays unlocked until reboot. The app is already set to never
+# auto-lock and not to lock on device lock; `1password --lock` would still
+# force a master-password prompt after every screensaver/idle/manual lock.
+# Restore stock behavior with OMARCHY_LOCK_1PASSWORD=1.
+if [[ "${OMARCHY_LOCK_1PASSWORD:-0}" == 1 ]] && pgrep -x "1password" >/dev/null && omarchy-cmd-present 1password; then
   (
     flock -n 9 || exit 0
     timeout --kill-after=1s 3s 1password --lock >/dev/null 2>&1 || true
