@@ -11,4 +11,5 @@ current_background=$(readlink -f "$HOME/.local/state/omarchy/current/background"
 omarchy-menu-images \
   --selected "$current_background" \
   "$HOME/.local/state/omarchy/current/theme/backgrounds" \
-  "$HOME/.config/omarchy/backgrounds/$theme_name"
+  "$HOME/.config/omarchy/backgrounds/$theme_name" \
+  "$HOME/.config/omarchy/backgrounds/_shared-videos"
