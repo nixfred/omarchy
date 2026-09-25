@@ -18,6 +18,10 @@ Item {
   property int selectedIndex: 0
   property bool cursorActive: false
   property var emojis: []
+  // vic patch: user image emojis from ~/.config/omarchy/emojis.custom.json,
+  // entries {"e":"name","k":"keywords","img":"/abs/path.png"}, listed first.
+  property var baseEmojis: []
+  property var customEmojis: []
   property var filteredEmojis: []
 
   // Shares the [menu] surface tokens — themes that style the menu also
@@ -67,7 +71,14 @@ Item {
   }
 
   function loadEmojis(raw) {
-    root.emojis = EmojiSearch.parseEmojis(raw)
+    root.baseEmojis = EmojiSearch.parseEmojis(raw)
+    root.emojis = root.customEmojis.concat(root.baseEmojis)
+    if (root.opened) root.rebuildDisplay()
+  }
+
+  function loadCustomEmojis(raw) {
+    root.customEmojis = EmojiSearch.parseEmojis(raw)
+    root.emojis = root.customEmojis.concat(root.baseEmojis)
     if (root.opened) root.rebuildDisplay()
   }
 
@@ -77,7 +88,7 @@ Item {
 
     displayModel.clear()
     for (var j = 0; j < out.length; j++) {
-      displayModel.append({ emoji: out[j].e, index: j })
+      displayModel.append({ emoji: out[j].e, img: out[j].img || "", index: j })
     }
 
     if (displayModel.count === 0) selectedIndex = 0
@@ -142,7 +153,13 @@ Item {
   function activateIndex(index) {
     if (index < 0 || index >= displayModel.count) return
     var row = displayModel.get(index)
-    root.applySelected(row.emoji)
+    if (row.img) root.applyImage(row.img)
+    else root.applySelected(row.emoji)
+  }
+
+  function applyImage(img) {
+    root.dismiss()
+    Quickshell.execDetached(["bash", "-c", "wl-copy --type image/png < \"$1\" && sleep 0.15 && wtype -M shift -k Insert -m shift", "_", img])
   }
 
   function applySelected(emoji) {
@@ -156,6 +173,13 @@ Item {
   FileView {
     path: root.omarchyPath + "/shell/plugins/emojis/emojis.json"
     onLoaded: root.loadEmojis(text())
+  }
+
+  FileView {
+    path: Quickshell.env("HOME") + "/.config/omarchy/emojis.custom.json"
+    watchChanges: true
+    onFileChanged: reload()
+    onLoaded: root.loadCustomEmojis(text())
   }
   PanelWindow {
     id: panel
@@ -276,6 +300,7 @@ Item {
             delegate: Rectangle {
               required property int index
               required property string emoji
+              required property string img
 
               readonly property bool hasCursor: root.cursorActive && index === root.selectedIndex
 
@@ -284,7 +309,20 @@ Item {
               radius: root.cornerRadius
               color: hasCursor ? root.selectedBackground : "transparent"
 
+              Image {
+                visible: parent.img !== ""
+                source: parent.img ? "file://" + parent.img : ""
+                width: Style.font.display * 1.25
+                height: width
+                sourceSize.width: width * 2
+                sourceSize.height: height * 2
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                anchors.centerIn: parent
+              }
+
               Text {
+                visible: parent.img === ""
                 textFormat: Text.PlainText
                 text: parent.emoji
                 font.family: root.fontFamily
